@@ -228,6 +228,23 @@ thread_block (void)
    be important: if the caller had disabled interrupts itself,
    it may expect that it can atomically unblock a thread and
    update other data. */
+
+
+
+
+
+/* Iki thread'in onceligini karsilastiran yardimci fonksiyon */
+bool 
+cmp_thread_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
+{
+  struct thread *t_a = list_entry (a, struct thread, elem);
+  struct thread *t_b = list_entry (b, struct thread, elem);
+  
+  /* a'nin onceligi b'den buyukse true doner (buyukten kucuge siralama yapar) */
+  return t_a->priority > t_b->priority;
+}
+
+
 void
 thread_unblock (struct thread *t) 
 {
@@ -237,7 +254,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  /* ESKI KOD: list_push_back (&ready_list, &t->elem); */
+  /* YENI KOD: */
+  list_insert_ordered (&ready_list, &t->elem, cmp_thread_priority, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -308,7 +327,9 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    /* ESKI KOD: list_push_back (&ready_list, &curr->elem); */
+  /* YENI KOD: */
+    list_insert_ordered (&ready_list, &cur->elem, cmp_thread_priority, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
