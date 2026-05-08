@@ -222,6 +222,28 @@ thread_block (void)
   schedule ();
 }
 
+/* Hazır listesi (ready_list) içindeki threadleri rütbelerine göre kıyaslar */
+bool
+cmp_ready_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *t_a = list_entry (a, struct thread, elem);
+  struct thread *t_b = list_entry (b, struct thread, elem);
+  
+  /* Rütbesi büyük olanın (priority) listede öne geçmesini istiyoruz */
+  return t_a->priority > t_b->priority;
+}
+
+
+/* Bağış listesi (donations) için rütbe kıyaslaması */
+bool
+cmp_donation_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *t_a = list_entry (a, struct thread, donation_elem);
+  struct thread *t_b = list_entry (b, struct thread, donation_elem);
+  
+  return t_a->priority > t_b->priority;
+}
+
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -239,8 +261,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered (&ready_list, &t->elem, cmp_ready_priority, NULL);
   t->status = THREAD_READY;
+  thread_test_preemption ();
   intr_set_level (old_level);
 }
 
@@ -310,7 +333,7 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered (&ready_list, &cur->elem, cmp_ready_priority, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -337,15 +360,34 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  /* Eğer MLFQS (Gelişmiş rütbe sistemi) açıksa bu kısıma dokunmuyoruz */
+  if (thread_mlfqs)
+    return;
+
+  enum intr_level old_level = intr_disable ();
+
+  struct thread *cur = thread_current ();
+  
+  /* 1. Thread'in temel (asıl) rütbesini güncelle */
+  cur->base_priority = new_priority;
+
+  /* 2. Bağışları da hesaba katarak gerçek rütbeyi yeniden hesapla */
+  thread_update_priority (cur);
+
+  /* 3. Yeni rütbemiz, hazırda bekleyenlerden düşük kalmış olabilir mi? 
+     Kontrol et ve gerekirse tahtı bırak (preemption). */
+  thread_test_preemption ();
+
+  intr_set_level (old_level);
 }
 
-/* Returns the current thread's priority. */
+/* Mevcut thread'in o anki rütbesini (bağışlar dahil) döndürür */
 int
 thread_get_priority (void) 
 {
   return thread_current ()->priority;
 }
+
 
 /* Sets the current thread's nice value to NICE. */
 void
@@ -464,6 +506,10 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->base_priority = priority;          /* B Kısmı: Orijinal rütbeyi sakla */
+  list_init (&t->donations);            /* B Kısmı: Bağış listesini sıfırla */
+  t->wait_on_lock = NULL;               /* B Kısmı: Henüz bir kilit beklemiyor */
+  t->wake_tick = 0;                     /* A Kısmı: Berke'nin uyanma zamanı değişkeni */
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -606,5 +652,81 @@ void thread_check_sleep (int64_t ticks)
         }
       else
         e = list_next (e);
+    }
+}
+
+
+/* Bagislanan rutbeyi zincirleme olarak (nested) aktarir */
+void
+thread_donate_priority (struct thread *t)
+{
+  int depth;
+  /* Pintos belgelerine gore zincirleme bagis siniri 8'dir */
+  for (depth = 0; depth < 8; depth++) 
+    {
+      if (!t) break;
+      
+      /* Rütbeyi guncelle */
+      thread_update_priority (t);
+      
+      /* Eger bu adam da baska bir kapida bekliyorsa, o kapinin sahibine gec (Zincir) */
+      if (t->wait_on_lock)
+        t = t->wait_on_lock->holder;
+      else
+        break;
+    }
+}
+
+/* Thread'in rutbesini kendi orijinal rutbesi ve bagiscilarin rutbeleri arasindan en buyugune gore gunceller */
+void
+thread_update_priority (struct thread *t)
+{
+  enum intr_level old_level = intr_disable (); /* Kesmeleri (interrupts) gecici kapat */
+  
+  int max_priority = t->base_priority; /* Varsayilan olarak kendi orijinal rutbesi */
+
+  if (!list_empty (&t->donations)) 
+    {
+      /* Bagis listesine sirali (insert_ordered) ekledigimiz icin, 
+         listenin en basindaki kisi en yuksek rutbeli bagiscidir */
+      list_sort (&t->donations, cmp_thread_priority, NULL);
+      struct thread *donor = list_entry (list_front (&t->donations), struct thread, donation_elem);
+      if (donor->priority > max_priority)
+        max_priority = donor->priority;
+    }
+
+  t->priority = max_priority;
+  intr_set_level (old_level); /* Kesmeleri geri ac */
+}
+
+/* Iki thread'in rütbesini karsilastiran hakem fonksiyonu */
+bool
+cmp_thread_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *t_a = list_entry (a, struct thread, donation_elem);
+  struct thread *t_b = list_entry (b, struct thread, donation_elem);
+  
+  /* Eger rütbe bagisi için kullanilmiyorsa normal eleman üzerinden al */
+  if (a == NULL || b == NULL) return false;
+  
+  /* Not: Bazı durumlarda 'elem' üzerinden karsilastirma gerekebilir, 
+     ama bagis listesi için 'donation_elem' kullaniyoruz. */
+  return t_a->priority > t_b->priority;
+}
+
+/* Su anki thread'den daha yüksek rütbeli biri gelmisse tahtı ona bırakır */
+void
+thread_test_preemption (void)
+{
+  if (!list_empty (&ready_list))
+    {
+      struct thread *highest_ready = list_entry (list_front (&ready_list), struct thread, elem);
+      if (highest_ready->priority > thread_current ()->priority)
+        {
+          if (intr_context ())
+            intr_yield_on_return ();
+          else
+            thread_yield ();
+        }
     }
 }

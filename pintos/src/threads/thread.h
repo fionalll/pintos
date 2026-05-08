@@ -80,6 +80,9 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+
+struct lock;
+
 struct thread
   {
     /* Owned by thread.c. */
@@ -88,7 +91,14 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    struct list_elem allelem;           /* List element for all threads list. */
+    struct list_elem allelem;             
+    /* --- BİZİM EKLEDİĞİMİZ KISIM BAŞLANGICI --- */
+    int base_priority;                  /* Orijinal rütbe (B Partı) */
+    struct list donations;              /* Bağışçılar listesi (B Partı) */
+    struct list_elem donation_elem;     /* Bağış listesi için eleman (B Partı) */
+    struct lock *wait_on_lock;          /* Beklenen kilit (B Partı) */
+               
+    /* --- BİZİM EKLEDİĞİMİZ KISIM BİTİŞİ --- */   /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -126,6 +136,8 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
+bool cmp_thread_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
+void thread_test_preemption (void);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
@@ -142,3 +154,5 @@ int thread_get_load_avg (void);
 #endif /* threads/thread.h */
 void thread_sleep (int64_t ticks);
 void thread_check_sleep (int64_t ticks);
+void thread_donate_priority (struct thread *t);
+void thread_update_priority (struct thread *t);
