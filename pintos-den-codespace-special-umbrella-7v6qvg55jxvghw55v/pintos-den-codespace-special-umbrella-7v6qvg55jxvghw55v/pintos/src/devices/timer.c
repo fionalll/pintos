@@ -19,6 +19,7 @@
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
+static struct list sleep_list;
 
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
@@ -37,6 +38,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init (&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +91,29 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  /* Eğer sıfır veya negatif bir süre uyunmak isteniyorsa, direkt dön */
+  if (ticks <= 0)
+    return;
 
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  int64_t start = timer_ticks ();
+  
+  /* Şu an çalışan (uyutacağımız) thread'i al */
+  struct thread *curr = thread_current ();
+
+  /* YARIŞ DURUMUNU (RACE CONDITION) ÖNLEMEK İÇİN KESMELERİ KAPAT */
+  enum intr_level old_level = intr_disable ();
+
+  /* 1. Uyanma zamanını hesapla ve thread'in içine kaydet */
+  curr->wake_up_time = start + ticks;
+
+  /* 2. Thread'i uyuyanlar listesine (sleep_list) ekle */
+  list_push_back (&sleep_list, &curr->elem);
+
+  /* 3. Thread'i blokla (İşlemciyi bırakır ve BLOCKED durumuna geçer) */
+  thread_block ();
+
+  /* İŞLEM BİTTİ: Kesmeleri eski haline getir */
+  intr_set_level (old_level);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +192,26 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  struct list_elem *e = list_begin (&sleep_list);
+  while (e != list_end (&sleep_list))
+    {
+      /* Liste elemanından, asıl thread yapısına ulaşıyoruz */
+      struct thread *t = list_entry (e, struct thread, elem);
+      
+      /* Eğer sistem saati (ticks), thread'in uyanma zamanına ulaştıysa veya geçityse */
+      if (ticks >= t->wake_up_time)
+        {
+          /* 1. Thread'i uyku listesinden çıkar */
+          e = list_remove (e);
+          /* 2. Thread'in engelini kaldır (READY listesine geri dönmesini sağla) */
+          thread_unblock (t);
+        }
+      else
+        {
+          /* Zamanı gelmediyse bir sonraki uyuyan thread'i kontrol etmeye geç */
+          e = list_next (e);
+        }
+    }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
