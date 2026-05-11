@@ -59,6 +59,7 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+static int64_t load_avg;       /* MLFQS: Sistem yük ortalaması (fixed-point) */
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -100,6 +101,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  load_avg = INT_TO_FP(0);          /* Başlangıçta yük sıfır */
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -184,6 +186,9 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  /* MLFQS başlangıç değerleri */
+ t->nice = running_thread()->nice;                   /* Ebeveynden al */
+ t->recent_cpu = running_thread()->recent_cpu;      /* Ebeveynden al */
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -391,34 +396,38 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int new_nice) 
 {
-  /* Not yet implemented. */
+  enum intr_level old_level = intr_disable ();
+  thread_current ()->nice = nice;
+  mlfqs_update_priority (thread_current ());
+  thread_yield ();
+  intr_set_level (old_level);
 }
+
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current()->nice;
 }
+
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_TO_INT_ROUND(FP_MUL_INT(load_avg, 100));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_TO_INT_ROUND(FP_MUL_INT(thread_current()->recent_cpu, 100));
 }
+
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
@@ -727,6 +736,71 @@ thread_test_preemption (void)
             intr_yield_on_return ();
           else
             thread_yield ();
-        }
+          /* MLFQS: Tek bir thread'in önceliğini hesapla
+   priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
+void
+mlfqs_update_priority (struct thread *t)
+{
+  if (t == idle_thread) return;
+  
+  int new_priority = PRI_MAX
+                     - FP_TO_INT (FP_DIV_INT (t->recent_cpu, 4))
+                     - (t->nice * 2);
+  
+  /* Sınırlar içinde tut */
+  if (new_priority > PRI_MAX) new_priority = PRI_MAX;
+  if (new_priority < PRI_MIN) new_priority = PRI_MIN;
+  
+  t->priority = new_priority;
+}
+
+/* MLFQS: Tüm thread'lerin recent_cpu'sunu güncelle
+   recent_cpu = (2*load_avg)/(2*load_avg+1) * recent_cpu + nice */
+void
+mlfqs_update_recent_cpu (void)
+{
+  struct list_elem *e;
+  int64_t coeff = FP_DIV (FP_MUL_INT (load_avg, 2),
+                           FP_ADD_INT (FP_MUL_INT (load_avg, 2), 1));
+  
+  for (e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if (t == idle_thread) continue;
+      t->recent_cpu = FP_ADD_INT (FP_MUL (coeff, t->recent_cpu), t->nice);
     }
+}
+/* MLFQS: load_avg'ı güncelle
+   load_avg = (59/60)*load_avg + (1/60)*ready_threads */
+void
+mlfqs_update_load_avg (void)
+{
+  size_t ready_threads = list_size (&ready_list);
+  if (thread_current () != idle_thread)
+    ready_threads++; /* Şu an çalışan thread de sayılır */
+  
+  load_avg = FP_ADD (FP_MUL (FP_DIV (INT_TO_FP (59), INT_TO_FP (60)), load_avg),
+                     FP_MUL_INT (FP_DIV (INT_TO_FP (1), INT_TO_FP (60)), ready_threads));
+}
+
+    void
+mlfqs_increment_recent_cpu (void)
+{
+  if (thread_current () == idle_thread) return;
+  thread_current ()->recent_cpu = 
+    FP_ADD_INT (thread_current ()->recent_cpu, 1);
+}
+
+void
+mlfqs_update_all_priorities (void)
+{
+  struct list_elem *e;
+  for (e = list_begin (&all_list); 
+       e != list_end (&all_list); 
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      mlfqs_update_priority (t);
+    }
+}
 }

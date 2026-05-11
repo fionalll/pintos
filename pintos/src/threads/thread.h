@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/fixed-point.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -97,6 +98,8 @@ struct thread
     struct list donations;              /* Bağışçılar listesi (B Partı) */
     struct list_elem donation_elem;     /* Bağış listesi için eleman (B Partı) */
     struct lock *wait_on_lock;          /* Beklenen kilit (B Partı) */
+    int nice;                           /* MLFQS: Nezaket değeri (-20 ile +20 arası) */
+    int64_t recent_cpu;                 /* MLFQS: Son CPU kullanımı (fixed-point) */
                
     /* --- BİZİM EKLEDİĞİMİZ KISIM BİTİŞİ --- */   /* List element for all threads list. */
 
@@ -150,6 +153,13 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+/* MLFQS fonksiyonları */
+void mlfqs_update_priority (struct thread *t);
+void mlfqs_update_recent_cpu (void);
+void mlfqs_update_load_avg (void);
+void mlfqs_increment_recent_cpu (void);
+void mlfqs_update_all_priorities (void);
 
 #endif /* threads/thread.h */
 void thread_sleep (int64_t ticks);
