@@ -783,7 +783,7 @@ mlfqs_update_load_avg (void)
                      FP_MUL_INT (FP_DIV (INT_TO_FP (1), INT_TO_FP (60)), ready_threads));
 }
 
-    void
+void
 mlfqs_increment_recent_cpu (void)
 {
   if (thread_current () == idle_thread) return;
