@@ -396,12 +396,12 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int new_nice) 
+thread_set_nice (int new_nice)
 {
   enum intr_level old_level = intr_disable ();
-  thread_current ()->nice = nice;
+  thread_current ()->nice = new_nice;   /* nice → new_nice */
   mlfqs_update_priority (thread_current ());
-  thread_yield ();
+  thread_test_preemption ();
   intr_set_level (old_level);
 }
 
@@ -736,6 +736,9 @@ thread_test_preemption (void)
             intr_yield_on_return ();
           else
             thread_yield ();
+        }
+    }
+}
           /* MLFQS: Tek bir thread'in önceliğini hesapla
    priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
 void
@@ -802,5 +805,4 @@ mlfqs_update_all_priorities (void)
       struct thread *t = list_entry (e, struct thread, allelem);
       mlfqs_update_priority (t);
     }
-}
 }

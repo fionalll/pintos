@@ -161,8 +161,9 @@ void mlfqs_update_load_avg (void);
 void mlfqs_increment_recent_cpu (void);
 void mlfqs_update_all_priorities (void);
 
-#endif /* threads/thread.h */
 void thread_sleep (int64_t ticks);
 void thread_check_sleep (int64_t ticks);
 void thread_donate_priority (struct thread *t);
 void thread_update_priority (struct thread *t);
+
+#endif /* threads/thread.h */
