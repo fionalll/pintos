@@ -204,9 +204,9 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
-
-  /* Add to run queue. */
+/* Add to run queue. */
   thread_unblock (t);
+  thread_test_preemption ();
 
   return tid;
 }
@@ -258,7 +258,7 @@ cmp_donation_priority (const struct list_elem *a, const struct list_elem *b, voi
    it may expect that it can atomically unblock a thread and
    update other data. */
 void
-thread_unblock (struct thread *t) 
+thread_unblock (struct thread *t)
 {
   enum intr_level old_level;
 
@@ -268,7 +268,7 @@ thread_unblock (struct thread *t)
   ASSERT (t->status == THREAD_BLOCKED);
   list_insert_ordered (&ready_list, &t->elem, cmp_ready_priority, NULL);
   t->status = THREAD_READY;
-  thread_test_preemption ();
+  /* thread_test_preemption BURADAN KALDIRILDI */
   intr_set_level (old_level);
 }
 
@@ -780,10 +780,12 @@ mlfqs_update_load_avg (void)
 {
   size_t ready_threads = list_size (&ready_list);
   if (thread_current () != idle_thread)
-    ready_threads++; /* Şu an çalışan thread de sayılır */
-  
-  load_avg = FP_ADD (FP_MUL (FP_DIV (INT_TO_FP (59), INT_TO_FP (60)), load_avg),
-                     FP_MUL_INT (FP_DIV (INT_TO_FP (1), INT_TO_FP (60)), ready_threads));
+    ready_threads++;
+
+  load_avg = FP_ADD (
+    FP_MUL (FP_DIV (INT_TO_FP (59), INT_TO_FP (60)), load_avg),
+    FP_MUL_INT (FP_DIV (INT_TO_FP (1), INT_TO_FP (60)), (int)ready_threads)
+  );
 }
 
 void

@@ -32,6 +32,7 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+bool cmp_ready_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
 bool cmp_cond_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
@@ -68,11 +69,12 @@ sema_down (struct semaphore *sema)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
+  
   while (sema->value == 0) 
-    {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
-      thread_block ();
-    }
+  {
+    list_push_back (&sema->waiters, &thread_current ()->elem);
+    thread_block ();
+  }
   sema->value--;
   intr_set_level (old_level);
 }
@@ -117,18 +119,14 @@ sema_up (struct semaphore *sema)
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
     {
-      /* 1. UYANDIRMADAN ÖNCE KUYRUĞU RÜTBEYE GÖRE SIRALA */
-      list_sort (&sema->waiters, cmp_thread_priority, NULL);
-      
+      list_sort (&sema->waiters, cmp_ready_priority, NULL);
       thread_unblock (list_entry (list_pop_front (&sema->waiters),
                                   struct thread, elem));
     }
   sema->value++;
-  
-  /* 2. UYANAN KİŞİ BİZDEN RÜTBELİYSE TAHTI ONA BIRAK */
-  thread_test_preemption ();
-  
   intr_set_level (old_level);
+  
+  thread_test_preemption ();
 }
 
 static void sema_test_helper (void *sema_);
@@ -383,11 +381,9 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
+if (!list_empty (&cond->waiters)) 
     {
-      /* UYANDIRMADAN ÖNCE CONDITION KUYRUĞUNU RÜTBEYE GÖRE SIRALA */
       list_sort (&cond->waiters, cmp_cond_priority, NULL);
-      
       sema_up (&list_entry (list_pop_front (&cond->waiters),
                             struct semaphore_elem, elem)->semaphore);
     }
